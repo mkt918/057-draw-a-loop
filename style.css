@@ -1,0 +1,30 @@
+/* Draw a Loop! - style.css */
+@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@400;700&display=swap');
+
+.caveat { font-family: 'Caveat', cursive; }
+
+/* 方眼紙背景 */
+.graph-bg {
+  background-color: #f5f5f0;
+  background-image:
+    linear-gradient(rgba(150,160,200,0.25) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(150,160,200,0.25) 1px, transparent 1px),
+    linear-gradient(rgba(150,160,200,0.10) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(150,160,200,0.10) 1px, transparent 1px);
+  background-size: 100px 100px, 100px 100px, 20px 20px, 20px 20px;
+}
+
+/* Puzzle card */
+.puzzle-card {
+  transition: box-shadow 0.2s;
+  border: 1.5px solid #e5e7eb;
+}
+.puzzle-card:hover {
+  box-shadow: 0 8px 24px rgba(37,99,235,0.10);
+}
+
+/* SVG cursor */
+svg { display: block; }
+
+/* Reset button */
+.reset-btn { font-family: 'Caveat', cursive; }
