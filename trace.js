@@ -1,7 +1,6 @@
 // ================== トレースモード ==================
 // loop.png背景の上にフリードロー
-// モード: 描く / 消しゴム
-// 機能: 一つ戻る / 全消し
+// スムージング: 二次ベジェ曲線（中点補間）でガタガタを自動補正
 function initTraceMode() {
     const img = document.getElementById('trace-bg');
     const canvas = document.getElementById('trace-canvas');
@@ -12,15 +11,15 @@ function initTraceMode() {
     if (!img || !canvas) return;
 
     const ctx = canvas.getContext('2d');
-    let mode = 'draw';   // 'draw' | 'erase'
+    let mode = 'draw';
     let drawing = false;
-    let history = [];       // アンドゥ用 ImageData スタック
+    let prev = null;   // 前フレームの座標
+    let history = [];     // アンドゥ用 ImageData スタック
 
     // ---- Canvas解像度を画像サイズに合わせる ----
     function resizeCanvas() {
         const rect = img.getBoundingClientRect();
         const dpr = window.devicePixelRatio || 1;
-        // 現在の描画を保持して復元
         let saved = null;
         if (canvas.width > 0 && canvas.height > 0) {
             saved = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -40,7 +39,7 @@ function initTraceMode() {
         } else {
             ctx.globalCompositeOperation = 'destination-out';
             ctx.strokeStyle = 'rgba(0,0,0,1)';
-            ctx.lineWidth = 24; // 消しゴムは太め
+            ctx.lineWidth = 24;
         }
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
@@ -52,9 +51,8 @@ function initTraceMode() {
 
     // ---- アンドゥ履歴を保存 ----
     function saveHistory() {
-        const snap = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        history.push(snap);
-        if (history.length > 30) history.shift(); // 最大30ステップ
+        history.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
+        if (history.length > 30) history.shift();
     }
 
     // ---- 座標取得 ----
@@ -64,31 +62,53 @@ function initTraceMode() {
         return { x: src.clientX - rect.left, y: src.clientY - rect.top };
     }
 
-    // ---- 描画イベント ----
+    // ---- 描画開始 ----
     function startDraw(e) {
-        if (e.button !== undefined && e.button !== 0) return; // 左クリックのみ
+        if (e.button !== undefined && e.button !== 0) return;
         e.preventDefault();
-        saveHistory(); // ストローク開始前に保存
+        saveHistory();
         drawing = true;
         applyStyle();
         const { x, y } = getPos(e);
+        prev = { x, y };
         ctx.beginPath();
         ctx.moveTo(x, y);
     }
 
+    // ---- 描画（二次ベジェ曲線スムージング） ----
+    // 前の点と現在の点の中点を「通過点」にして quadraticCurveTo を使う。
+    // 生座標をそのまま使うガタガタが解消される。
     function draw(e) {
         if (!drawing) return;
         e.preventDefault();
         const { x, y } = getPos(e);
-        ctx.lineTo(x, y);
+
+        // 中点を計算（スムージングの核心）
+        const midX = (prev.x + x) / 2;
+        const midY = (prev.y + y) / 2;
+
+        // prev を制御点、中点を終点とした二次ベジェで描画
+        ctx.quadraticCurveTo(prev.x, prev.y, midX, midY);
         ctx.stroke();
+
+        // 次のセグメントの開始点を中点にセット
         ctx.beginPath();
-        ctx.moveTo(x, y);
+        ctx.moveTo(midX, midY);
+
+        prev = { x, y };
     }
 
+    // ---- 描画終了 ----
     function stopDraw() {
+        if (!drawing) return;
         drawing = false;
+        // 最後の点まで直線で締める
+        if (prev) {
+            ctx.lineTo(prev.x, prev.y);
+            ctx.stroke();
+        }
         ctx.beginPath();
+        prev = null;
     }
 
     canvas.addEventListener('mousedown', startDraw);
@@ -100,30 +120,23 @@ function initTraceMode() {
     canvas.addEventListener('touchend', stopDraw);
     canvas.addEventListener('contextmenu', e => e.preventDefault());
 
-    // ---- カーソルをモードに応じて変更 ----
+    // ---- カーソル変更 ----
     function updateCursor() {
         canvas.style.cursor = mode === 'erase' ? 'cell' : 'crosshair';
     }
 
-    // ---- モード切替ボタン ----
+    // ---- モード切替 ----
     function setMode(m) {
         mode = m;
         updateCursor();
-        if (m === 'draw') {
-            btnDraw.classList.replace('bg-white', 'bg-blue-500');
-            btnDraw.classList.replace('text-gray-500', 'text-white');
-            btnDraw.classList.replace('border-gray-300', 'border-blue-500');
-            btnErase.classList.replace('bg-blue-500', 'bg-white');
-            btnErase.classList.replace('text-white', 'text-gray-500');
-            btnErase.classList.replace('border-blue-500', 'border-gray-300');
-        } else {
-            btnErase.classList.replace('bg-white', 'bg-blue-500');
-            btnErase.classList.replace('text-gray-500', 'text-white');
-            btnErase.classList.replace('border-gray-300', 'border-blue-500');
-            btnDraw.classList.replace('bg-blue-500', 'bg-white');
-            btnDraw.classList.replace('text-white', 'text-gray-500');
-            btnDraw.classList.replace('border-blue-500', 'border-gray-300');
-        }
+        const isErase = m === 'erase';
+        [btnDraw, btnErase].forEach((btn, i) => {
+            const active = (i === 0 && !isErase) || (i === 1 && isErase);
+            btn.className = btn.className
+                .replace(/bg-blue-500|bg-white/g, active ? 'bg-blue-500' : 'bg-white')
+                .replace(/text-white|text-gray-500/g, active ? 'text-white' : 'text-gray-500')
+                .replace(/border-blue-500|border-gray-300/g, active ? 'border-blue-500' : 'border-gray-300');
+        });
     }
 
     if (btnDraw) btnDraw.addEventListener('click', () => setMode('draw'));
@@ -133,8 +146,7 @@ function initTraceMode() {
     if (btnUndo) {
         btnUndo.addEventListener('click', () => {
             if (history.length === 0) return;
-            const snap = history.pop();
-            ctx.putImageData(snap, 0, 0);
+            ctx.putImageData(history.pop(), 0, 0);
         });
     }
 
@@ -142,8 +154,8 @@ function initTraceMode() {
     if (btnClear) {
         btnClear.addEventListener('click', () => {
             saveHistory();
-            ctx.clearRect(0, 0, canvas.width / (window.devicePixelRatio || 1),
-                canvas.height / (window.devicePixelRatio || 1));
+            const dpr = window.devicePixelRatio || 1;
+            ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
         });
     }
 }
