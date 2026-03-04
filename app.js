@@ -46,6 +46,28 @@ class PuzzleState {
 
     cellKey(r, c) { return `${r},${c}`; }
 
+    isDot(r, c) {
+        return this.puzzle.dots.some(d => d.r === r && d.c === c);
+    }
+
+    // ---- セグメントをクリックでキャンセル ----
+    // segIdx = path[segIdx] → path[segIdx+1] のセグメント
+    clickSegment(segIdx) {
+        if (this.solved) return;
+        const a = this.path[segIdx];
+        const b = this.path[segIdx + 1];
+        if (!a || !b) return;
+        // 両端が○セルの場合のみキャンセル可能
+        if (this.isDot(a.r, a.c) && this.isDot(b.r, b.c)) {
+            // path[0]〜path[segIdx] までに切り詰める
+            const removed = this.path.splice(segIdx + 1);
+            for (const cell of removed) this.pathSet.delete(this.cellKey(cell.r, cell.c));
+            this.drawing = false;
+            this.redrawPath();
+        }
+        // 両端が○でない場合は何もしない
+    }
+
     // ---- パスを開始 ----
     startPath(r, c) {
         if (this.solved || !this.isCell(r, c)) return;
@@ -126,13 +148,33 @@ class PuzzleState {
             const y1 = MARGIN + a.r * CELL + CELL / 2;
             const x2 = MARGIN + b.c * CELL + CELL / 2;
             const y2 = MARGIN + b.r * CELL + CELL / 2;
+
+            // 両端が○かどうかで色を変える
+            const bothDots = this.isDot(a.r, a.c) && this.isDot(b.r, b.c);
+            const strokeColor = bothDots ? '#7c3aed' : '#2563eb'; // 紫=キャンセル可, 青=通常
+
             const line = svgEl('line', {
                 x1, y1, x2, y2,
-                stroke: '#2563eb', 'stroke-width': '6',
+                stroke: strokeColor, 'stroke-width': '6',
                 'stroke-linecap': 'round'
             });
             this.svgEl.insertBefore(line, this.svgEl.querySelector('.overlay-group'));
             this.pathLineEls.push(line);
+
+            // クリック用透明ヒットエリア（太め）
+            const hit = svgEl('line', {
+                x1, y1, x2, y2,
+                stroke: 'transparent', 'stroke-width': '18',
+                'stroke-linecap': 'round',
+                style: bothDots ? 'cursor: pointer;' : 'cursor: default;'
+            });
+            const segIdx = i;
+            hit.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.clickSegment(segIdx);
+            });
+            this.svgEl.insertBefore(hit, this.svgEl.querySelector('.overlay-group'));
+            this.pathLineEls.push(hit);
         }
 
         // ループ完成時の閉じる線（最後→最初）
