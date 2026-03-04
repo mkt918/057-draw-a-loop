@@ -1,9 +1,16 @@
 // Draw a Loop! - ゲームロジック（セル移動方式）
 // セルをクリック/ドラッグして一筆書きのループを描く
 
-const CELL = 52;
 const MARGIN = 16;
 const NS = 'http://www.w3.org/2000/svg';
+
+// パズルのサイズに応じてセルサイズを動的決定
+function getCellSize(puzzle) {
+    const cols = puzzle.grid[0].length;
+    if (cols >= 30) return 18;   // 大グリッド（フリープレイ）
+    if (cols >= 6) return 36;   // 中グリッド
+    return 52;                   // 小パズル
+}
 
 function svgEl(tag, attrs = {}) {
     const e = document.createElementNS(NS, tag);
@@ -15,15 +22,16 @@ function svgEl(tag, attrs = {}) {
 class PuzzleState {
     constructor(puzzle, container) {
         this.puzzle = puzzle;
+        this.CELL = getCellSize(puzzle);
         this.rows = puzzle.grid.length;
         this.cols = puzzle.grid[0].length;
-        this.path = [];          // セルのインデックス順リスト [{r,c}, ...]
-        this.pathSet = new Set(); // 通過済みセルの "r,c" セット
-        this.drawing = false;    // ドラッグ中か
+        this.path = [];
+        this.pathSet = new Set();
+        this.drawing = false;
         this.solved = false;
         this.container = container;
-        this.cellEls = {};       // "r,c" -> rect SVG要素
-        this.pathLineEls = [];   // path line SVGリスト
+        this.cellEls = {};
+        this.pathLineEls = [];
         this.svgEl = null;
         this.build();
     }
@@ -50,22 +58,18 @@ class PuzzleState {
         return this.puzzle.dots.some(d => d.r === r && d.c === c);
     }
 
-    // ---- セグメントをクリックでキャンセル ----
-    // segIdx = path[segIdx] → path[segIdx+1] のセグメント
+    // ---- ○と○の間の線をクリックでキャンセル ----
     clickSegment(segIdx) {
         if (this.solved) return;
         const a = this.path[segIdx];
         const b = this.path[segIdx + 1];
         if (!a || !b) return;
-        // 両端が○セルの場合のみキャンセル可能
         if (this.isDot(a.r, a.c) && this.isDot(b.r, b.c)) {
-            // path[0]〜path[segIdx] までに切り詰める
             const removed = this.path.splice(segIdx + 1);
             for (const cell of removed) this.pathSet.delete(this.cellKey(cell.r, cell.c));
             this.drawing = false;
             this.redrawPath();
         }
-        // 両端が○でない場合は何もしない
     }
 
     // ---- パスを開始 ----
@@ -83,7 +87,7 @@ class PuzzleState {
         const last = this.path[this.path.length - 1];
         const key = this.cellKey(r, c);
 
-        // 直前のセルを戻るならアンドゥ
+        // 直前のセルに戻るならアンドゥ
         if (this.path.length >= 2) {
             const prev = this.path[this.path.length - 2];
             if (prev.r === r && prev.c === c) {
@@ -94,10 +98,7 @@ class PuzzleState {
             }
         }
 
-        // 既に通ったセルはスキップ（ループ完成チェック以外）
         if (this.pathSet.has(key)) return;
-
-        // 隣接チェック
         if (!this.isAdjacent(last, { r, c })) return;
 
         this.path.push({ r, c });
@@ -114,20 +115,29 @@ class PuzzleState {
 
         const first = this.path[0];
         const last = this.path[this.path.length - 1];
+        const isClosed = this.isAdjacent(first, last);
 
-        // 最後と最初が隣接 && 全セルを通った場合にループ完成
-        if (this.isAdjacent(first, last) && this.path.length === this.totalCells()) {
-            this.solved = true;
-            this.showSolved();
+        if (this.puzzle.freePlay) {
+            // フリーモード: 閉じたループなら何セルでもOK
+            if (isClosed) {
+                this.solved = true;
+                this.showSolved();
+            }
+        } else {
+            // 通常モード: 全セル通過 + 閉じたループ
+            if (isClosed && this.path.length === this.totalCells()) {
+                this.solved = true;
+                this.showSolved();
+            }
         }
-        // 完成していない場合もパスは表示したままにする（ユーザーが確認できるよう）
     }
 
     // ---- パスの再描画 ----
     redrawPath() {
-        // 既存のpath lineを全削除
         for (const el of this.pathLineEls) el.remove();
         this.pathLineEls = [];
+
+        const C = this.CELL;
 
         // セル色を更新
         for (let r = 0; r < this.rows; r++) {
@@ -135,71 +145,66 @@ class PuzzleState {
                 if (!this.puzzle.grid[r][c]) continue;
                 const el = this.cellEls[this.cellKey(r, c)];
                 if (!el) continue;
-                const inPath = this.pathSet.has(this.cellKey(r, c));
-                el.setAttribute('fill', inPath ? '#dbeafe' : '#f0f4ff');
+                el.setAttribute('fill', this.pathSet.has(this.cellKey(r, c)) ? '#dbeafe' : '#f0f4ff');
             }
         }
 
-        // パスの線を描画（セル中心を結ぶ）
+        // セグメント線を描画
+        const lw = C >= 40 ? 6 : 4;
         for (let i = 0; i < this.path.length - 1; i++) {
             const a = this.path[i];
             const b = this.path[i + 1];
-            const x1 = MARGIN + a.c * CELL + CELL / 2;
-            const y1 = MARGIN + a.r * CELL + CELL / 2;
-            const x2 = MARGIN + b.c * CELL + CELL / 2;
-            const y2 = MARGIN + b.r * CELL + CELL / 2;
+            const x1 = MARGIN + a.c * C + C / 2;
+            const y1 = MARGIN + a.r * C + C / 2;
+            const x2 = MARGIN + b.c * C + C / 2;
+            const y2 = MARGIN + b.r * C + C / 2;
 
-            // 両端が○かどうかで色を変える
             const bothDots = this.isDot(a.r, a.c) && this.isDot(b.r, b.c);
-            const strokeColor = bothDots ? '#7c3aed' : '#2563eb'; // 紫=キャンセル可, 青=通常
+            const color = bothDots ? '#7c3aed' : '#2563eb';
 
             const line = svgEl('line', {
                 x1, y1, x2, y2,
-                stroke: strokeColor, 'stroke-width': '6',
+                stroke: color, 'stroke-width': lw,
                 'stroke-linecap': 'round'
             });
             this.svgEl.insertBefore(line, this.svgEl.querySelector('.overlay-group'));
             this.pathLineEls.push(line);
 
-            // クリック用透明ヒットエリア（太め）
+            // クリック用ヒットエリア
             const hit = svgEl('line', {
                 x1, y1, x2, y2,
-                stroke: 'transparent', 'stroke-width': '18',
+                stroke: 'transparent', 'stroke-width': 18,
                 'stroke-linecap': 'round',
                 style: bothDots ? 'cursor: pointer;' : 'cursor: default;'
             });
-            const segIdx = i;
-            hit.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.clickSegment(segIdx);
-            });
+            const si = i;
+            hit.addEventListener('click', e => { e.stopPropagation(); this.clickSegment(si); });
             this.svgEl.insertBefore(hit, this.svgEl.querySelector('.overlay-group'));
             this.pathLineEls.push(hit);
         }
 
-        // ループ完成時の閉じる線（最後→最初）
+        // ループ完成時の閉じる線
         if (this.solved && this.path.length > 1) {
             const a = this.path[this.path.length - 1];
             const b = this.path[0];
-            const x1 = MARGIN + a.c * CELL + CELL / 2;
-            const y1 = MARGIN + a.r * CELL + CELL / 2;
-            const x2 = MARGIN + b.c * CELL + CELL / 2;
-            const y2 = MARGIN + b.r * CELL + CELL / 2;
             const line = svgEl('line', {
-                x1, y1, x2, y2,
-                stroke: '#16a34a', 'stroke-width': '6',
-                'stroke-linecap': 'round'
+                x1: MARGIN + a.c * C + C / 2, y1: MARGIN + a.r * C + C / 2,
+                x2: MARGIN + b.c * C + C / 2, y2: MARGIN + b.r * C + C / 2,
+                stroke: '#16a34a', 'stroke-width': lw, 'stroke-linecap': 'round'
             });
             this.svgEl.insertBefore(line, this.svgEl.querySelector('.overlay-group'));
             this.pathLineEls.push(line);
         }
 
-        // 始点と終点にドットを表示
+        // 始点ドット
         if (this.path.length > 0) {
-            const start = this.path[0];
-            const cx = MARGIN + start.c * CELL + CELL / 2;
-            const cy = MARGIN + start.r * CELL + CELL / 2;
-            const dot = svgEl('circle', { cx, cy, r: 7, fill: '#2563eb' });
+            const s = this.path[0];
+            const dot = svgEl('circle', {
+                cx: MARGIN + s.c * C + C / 2,
+                cy: MARGIN + s.r * C + C / 2,
+                r: C >= 40 ? 7 : 5,
+                fill: '#2563eb'
+            });
             this.svgEl.insertBefore(dot, this.svgEl.querySelector('.overlay-group'));
             this.pathLineEls.push(dot);
         }
@@ -209,10 +214,8 @@ class PuzzleState {
         const overlay = this.container.querySelector('.solved-overlay');
         if (overlay) overlay.classList.remove('hidden');
         showToast();
-        // 全セルを緑色に
-        for (const key of Object.keys(this.cellEls)) {
+        for (const key of Object.keys(this.cellEls))
             this.cellEls[key].setAttribute('fill', '#bbf7d0');
-        }
     }
 
     reset() {
@@ -232,82 +235,59 @@ class PuzzleState {
 
     // ---- SVGを構築 ----
     build() {
-        const W = this.cols * CELL + MARGIN * 2;
-        const H = this.rows * CELL + MARGIN * 2;
+        const C = this.CELL;
+        const W = this.cols * C + MARGIN * 2;
+        const H = this.rows * C + MARGIN * 2;
         const svg = svgEl('svg', {
             width: W, height: H, viewBox: `0 0 ${W} ${H}`,
-            style: 'touch-action: none; user-select: none;'
+            style: 'touch-action: none; user-select: none; display: block;'
         });
         this.svgEl = svg;
 
-        // ---- セル背景 ----
+        // セル背景
         for (let r = 0; r < this.rows; r++) {
             for (let c = 0; c < this.cols; c++) {
                 if (!this.puzzle.grid[r][c]) continue;
                 const rect = svgEl('rect', {
-                    x: MARGIN + c * CELL, y: MARGIN + r * CELL,
-                    width: CELL, height: CELL,
-                    fill: '#f0f4ff', rx: '4',
-                    stroke: '#a5b4fc', 'stroke-width': '1.5'
+                    x: MARGIN + c * C, y: MARGIN + r * C,
+                    width: C, height: C,
+                    fill: '#f0f4ff',
+                    rx: C >= 40 ? '4' : '2',
+                    stroke: '#a5b4fc',
+                    'stroke-width': C >= 40 ? '1.5' : '0.8'
                 });
                 this.cellEls[this.cellKey(r, c)] = rect;
                 svg.appendChild(rect);
             }
         }
 
-        // ---- ドット（○）表示 ----
+        // ドット（○）
         const overlayGroup = svgEl('g', { class: 'overlay-group' });
         for (const d of this.puzzle.dots) {
-            const cx = MARGIN + d.c * CELL + CELL / 2;
-            const cy = MARGIN + d.r * CELL + CELL / 2;
-            overlayGroup.appendChild(svgEl('circle', {
-                cx, cy, r: 10, fill: 'white', stroke: '#1e3a8a', 'stroke-width': '2.5'
-            }));
-            overlayGroup.appendChild(svgEl('circle', {
-                cx, cy, r: 4, fill: '#1e3a8a'
-            }));
+            const cx = MARGIN + d.c * C + C / 2;
+            const cy = MARGIN + d.r * C + C / 2;
+            overlayGroup.appendChild(svgEl('circle', { cx, cy, r: 10, fill: 'white', stroke: '#1e3a8a', 'stroke-width': '2.5' }));
+            overlayGroup.appendChild(svgEl('circle', { cx, cy, r: 4, fill: '#1e3a8a' }));
         }
         svg.appendChild(overlayGroup);
 
-        // ---- セル番号（デバッグ用・非表示）----
-
-        // ---- イベント: マウス/タッチ ----
+        // マウスイベント
         const getCell = (x, y) => {
             const rect = svg.getBoundingClientRect();
-            const px = x - rect.left;
-            const py = y - rect.top;
-            const c = Math.floor((px - MARGIN) / CELL);
-            const r = Math.floor((py - MARGIN) / CELL);
-            return { r, c };
+            return {
+                r: Math.floor((y - rect.top - MARGIN) / C),
+                c: Math.floor((x - rect.left - MARGIN) / C)
+            };
         };
 
-        // マウス
-        svg.addEventListener('mousedown', e => {
-            const { r, c } = getCell(e.clientX, e.clientY);
-            this.startPath(r, c);
-        });
-        svg.addEventListener('mousemove', e => {
-            if (!this.drawing) return;
-            const { r, c } = getCell(e.clientX, e.clientY);
-            this.extendPath(r, c);
-        });
+        svg.addEventListener('mousedown', e => { const { r, c } = getCell(e.clientX, e.clientY); this.startPath(r, c); });
+        svg.addEventListener('mousemove', e => { if (!this.drawing) return; const { r, c } = getCell(e.clientX, e.clientY); this.extendPath(r, c); });
         svg.addEventListener('mouseup', () => this.endPath());
         svg.addEventListener('mouseleave', () => { if (this.drawing) this.endPath(); });
 
-        // タッチ
-        svg.addEventListener('touchstart', e => {
-            e.preventDefault();
-            const t = e.touches[0];
-            const { r, c } = getCell(t.clientX, t.clientY);
-            this.startPath(r, c);
-        }, { passive: false });
-        svg.addEventListener('touchmove', e => {
-            e.preventDefault();
-            if (!this.drawing) return;
-            const t = e.touches[0];
-            const { r, c } = getCell(t.clientX, t.clientY);
-            this.extendPath(r, c);
-        }, { passive: false });
+        // タッチイベント
+        svg.addEventListener('touchstart', e => { e.preventDefault(); const t = e.touches[0]; const { r, c } = getCell(t.clientX, t.clientY); this.startPath(r, c); }, { passive: false });
+        svg.addEventListener('touchmove', e => { e.preventDefault(); if (!this.drawing) return; const t = e.touches[0]; const { r, c } = getCell(t.clientX, t.clientY); this.extendPath(r, c); }, { passive: false });
         svg.addEventListener('touchend', () => this.endPath());
 
         this.container.querySelector('.svg-wrap').appendChild(svg);
@@ -324,6 +304,8 @@ function showToast() {
 // ================== レンダリング ==================
 function renderAll() {
     const root = document.getElementById('sets-container');
+
+    // --- 通常パズルセット ---
     for (const set of PUZZLE_SETS) {
         const setDiv = document.createElement('div');
         setDiv.innerHTML = `
@@ -346,12 +328,35 @@ function renderAll() {
         </div>
       `;
             row.appendChild(card);
-
             const state = new PuzzleState(puzzle, card);
             card.querySelector('.reset-btn').addEventListener('click', () => state.reset());
         }
         root.appendChild(setDiv);
     }
+
+    // --- 25×45 フリープレイ ---
+    const freeSection = document.createElement('div');
+    freeSection.innerHTML = `
+    <h2 class="caveat text-3xl font-bold mb-2 text-purple-600">🎨 Free Play（25×45）</h2>
+    <p class="caveat text-gray-500 mb-4 text-base">好きなループを描こう！始めたセルに戻って手を離すと完成！</p>
+  `;
+    const freeCard = document.createElement('div');
+    freeCard.className = 'bg-white rounded-xl shadow-md p-4 relative select-none overflow-auto';
+    freeCard.innerHTML = `
+    <div class="svg-wrap mb-2"></div>
+    <div class="solved-overlay hidden absolute inset-0 bg-green-400/20 rounded-xl flex items-center justify-center pointer-events-none">
+      <span class="caveat text-4xl font-bold text-green-700">✓ Loop Complete!</span>
+    </div>
+    <div class="flex items-center justify-between mt-2">
+      <span class="caveat text-sm text-gray-400">Free Play</span>
+      <button class="reset-btn caveat text-sm text-gray-400 hover:text-gray-700 border border-gray-300 rounded px-3 py-1 transition">リセット</button>
+    </div>
+  `;
+    freeSection.appendChild(freeCard);
+    root.appendChild(freeSection);
+
+    const freeState = new PuzzleState(FREE_PLAY_PUZZLE, freeCard);
+    freeCard.querySelector('.reset-btn').addEventListener('click', () => freeState.reset());
 }
 
 document.addEventListener('DOMContentLoaded', renderAll);
