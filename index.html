@@ -30,8 +30,28 @@
         <p class="caveat text-sm text-blue-400 mt-1">ドラッグで移動 / 手前のセルに戻るとやり直し / リセットで最初から</p>
       </div>
 
+      <!-- トレースモード：loop.png背景 + フリードロー -->
+      <div class="mb-14">
+        <h2 class="caveat text-3xl font-bold mb-2 text-indigo-600">✏️ Trace Mode</h2>
+        <p class="caveat text-gray-500 mb-3 text-base">画像の上に自由に線を描こう！右クリックで消去。</p>
+        <div class="relative inline-block rounded-xl overflow-hidden shadow-lg border border-gray-200 bg-white">
+          <img id="trace-bg" src="loop.png" alt="Draw a Loop reference"
+            style="display:block; max-width:100%; height:auto;">
+          <canvas id="trace-canvas"
+            style="position:absolute;top:0;left:0;width:100%;height:100%;cursor:crosshair;touch-action:none;">
+          </canvas>
+        </div>
+        <div class="flex gap-3 mt-3">
+          <button id="trace-clear"
+            class="caveat text-sm border border-gray-300 rounded-lg px-4 py-1.5 text-gray-500 hover:text-red-500 hover:border-red-300 transition bg-white shadow-sm">🗑
+            クリア</button>
+          <span class="caveat text-xs text-gray-400 self-center">ドラッグで描く / 右クリックでクリア</span>
+        </div>
+      </div>
+
       <!-- パズルセット -->
       <div id="sets-container" class="space-y-14"></div>
+
 
     </div>
   </div>
@@ -45,6 +65,7 @@
 
   <script src="puzzles.js"></script>
   <script src="app.js"></script>
+  <script src="trace.js"></script>
 </body>
 
 </html>
