@@ -1,7 +1,8 @@
-// Draw a Loop! - ゲームロジック
-const CELL = 48;
-const MARGIN = 24;
-const DOT_R = 7;
+// Draw a Loop! - ゲームロジック（セル移動方式）
+// セルをクリック/ドラッグして一筆書きのループを描く
+
+const CELL = 52;
+const MARGIN = 16;
 const NS = 'http://www.w3.org/2000/svg';
 
 function svgEl(tag, attrs = {}) {
@@ -16,11 +17,14 @@ class PuzzleState {
         this.puzzle = puzzle;
         this.rows = puzzle.grid.length;
         this.cols = puzzle.grid[0].length;
-        this.hEdges = Array.from({ length: this.rows + 1 }, () => new Array(this.cols).fill(false));
-        this.vEdges = Array.from({ length: this.rows }, () => new Array(this.cols + 1).fill(false));
+        this.path = [];          // セルのインデックス順リスト [{r,c}, ...]
+        this.pathSet = new Set(); // 通過済みセルの "r,c" セット
+        this.drawing = false;    // ドラッグ中か
         this.solved = false;
-        this.edgeEls = {};
         this.container = container;
+        this.cellEls = {};       // "r,c" -> rect SVG要素
+        this.pathLineEls = [];   // path line SVGリスト
+        this.svgEl = null;
         this.build();
     }
 
@@ -28,203 +32,241 @@ class PuzzleState {
         return r >= 0 && r < this.rows && c >= 0 && c < this.cols && this.puzzle.grid[r][c] === 1;
     }
 
-    hClickable(r, c) { return this.isCell(r - 1, c) || this.isCell(r, c); }
-    vClickable(r, c) { return this.isCell(r, c - 1) || this.isCell(r, c); }
-
-    toggleH(r, c) {
-        if (this.solved || !this.hClickable(r, c)) return;
-        this.hEdges[r][c] = !this.hEdges[r][c];
-        this.repaintEdge('h', r, c);
-        this.check();
+    totalCells() {
+        let n = 0;
+        for (let r = 0; r < this.rows; r++)
+            for (let c = 0; c < this.cols; c++)
+                if (this.puzzle.grid[r][c] === 1) n++;
+        return n;
     }
 
-    toggleV(r, c) {
-        if (this.solved || !this.vClickable(r, c)) return;
-        this.vEdges[r][c] = !this.vEdges[r][c];
-        this.repaintEdge('v', r, c);
-        this.check();
+    isAdjacent(a, b) {
+        return Math.abs(a.r - b.r) + Math.abs(a.c - b.c) === 1;
     }
 
-    repaintEdge(type, r, c) {
-        const el = this.edgeEls[`${type}-${r}-${c}`];
-        if (!el) return;
-        const active = type === 'h' ? this.hEdges[r][c] : this.vEdges[r][c];
-        el.setAttribute('stroke', active ? '#1e3a8a' : 'transparent');
-        el.setAttribute('stroke-width', active ? '4' : '0');
-        el.setAttribute('stroke-linecap', 'round');
+    cellKey(r, c) { return `${r},${c}`; }
+
+    // ---- パスを開始 ----
+    startPath(r, c) {
+        if (this.solved || !this.isCell(r, c)) return;
+        this.path = [{ r, c }];
+        this.pathSet = new Set([this.cellKey(r, c)]);
+        this.drawing = true;
+        this.redrawPath();
     }
 
-    // ---- Win check ----
-    check() {
-        if (this.hasValidLoop() && this.allDotsEnclosed()) {
+    // ---- セルを追加 ----
+    extendPath(r, c) {
+        if (!this.drawing || !this.isCell(r, c)) return;
+        const last = this.path[this.path.length - 1];
+        const key = this.cellKey(r, c);
+
+        // 直前のセルを戻るならアンドゥ
+        if (this.path.length >= 2) {
+            const prev = this.path[this.path.length - 2];
+            if (prev.r === r && prev.c === c) {
+                this.pathSet.delete(this.cellKey(last.r, last.c));
+                this.path.pop();
+                this.redrawPath();
+                return;
+            }
+        }
+
+        // 既に通ったセルはスキップ（ループ完成チェック以外）
+        if (this.pathSet.has(key)) return;
+
+        // 隣接チェック
+        if (!this.isAdjacent(last, { r, c })) return;
+
+        this.path.push({ r, c });
+        this.pathSet.add(key);
+        this.redrawPath();
+    }
+
+    // ---- ドラッグ終了 → ループ完成チェック ----
+    endPath() {
+        if (!this.drawing) return;
+        this.drawing = false;
+
+        if (this.path.length < 3) { this.reset(); return; }
+
+        const first = this.path[0];
+        const last = this.path[this.path.length - 1];
+
+        // 最後と最初が隣接 && 全セルを通った場合にループ完成
+        if (this.isAdjacent(first, last) && this.path.length === this.totalCells()) {
             this.solved = true;
-            this.onSolved();
+            this.showSolved();
         }
+        // 完成していない場合もパスは表示したままにする（ユーザーが確認できるよう）
     }
 
-    hasValidLoop() {
-        const deg = {}, adj = {};
-        const addE = (a, b) => {
-            deg[a] = (deg[a] || 0) + 1;
-            deg[b] = (deg[b] || 0) + 1;
-            (adj[a] = adj[a] || []).push(b);
-            (adj[b] = adj[b] || []).push(a);
-        };
-        for (let r = 0; r <= this.rows; r++)
-            for (let c = 0; c < this.cols; c++)
-                if (this.hEdges[r][c]) addE(`${r},${c}`, `${r},${c + 1}`);
-        for (let r = 0; r < this.rows; r++)
-            for (let c = 0; c <= this.cols; c++)
-                if (this.vEdges[r][c]) addE(`${r},${c}`, `${r + 1},${c}`);
+    // ---- パスの再描画 ----
+    redrawPath() {
+        // 既存のpath lineを全削除
+        for (const el of this.pathLineEls) el.remove();
+        this.pathLineEls = [];
 
-        const verts = Object.keys(deg);
-        if (verts.length === 0) return false;
-        for (const v of verts) if (deg[v] !== 2) return false;
-
-        // connectivity BFS
-        const vis = new Set([verts[0]]);
-        const q = [verts[0]];
-        while (q.length) {
-            const cur = q.pop();
-            for (const nb of (adj[cur] || [])) {
-                if (!vis.has(nb)) { vis.add(nb); q.push(nb); }
-            }
-        }
-        return vis.size === verts.length;
-    }
-
-    allDotsEnclosed() {
-        if (this.puzzle.dots.length === 0) return true;
-        const R = this.rows, C = this.cols;
-        const outside = new Set();
-        const enc = (r, c) => `${r},${c}`;
-
-        // can move from (r1,c1) to (r2,c2) without crossing an active edge?
-        const canMove = (r1, c1, r2, c2) => {
-            if (r1 === r2) {
-                const c = Math.min(c1, c2) + 1;
-                if (r1 >= 0 && r1 < R && c >= 0 && c <= C) return !this.vEdges[r1][c];
-                return true;
-            } else {
-                const r = Math.min(r1, r2) + 1;
-                if (c1 >= 0 && c1 < C && r >= 0 && r <= R) return !this.hEdges[r][c1];
-                return true;
-            }
-        };
-
-        // BFS from virtual border cells (-1‥R, -1‥C)
-        const q = [];
-        const seed = (r, c) => { const k = enc(r, c); if (!outside.has(k)) { outside.add(k); q.push([r, c]); } };
-        for (let c = -1; c <= C; c++) { seed(-1, c); seed(R, c); }
-        for (let r = 0; r < R; r++) { seed(r, -1); seed(r, C); }
-
-        let i = 0;
-        while (i < q.length) {
-            const [r, c] = q[i++];
-            for (const [nr, nc] of [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]]) {
-                if (nr < -1 || nr > R || nc < -1 || nc > C) continue;
-                if (outside.has(enc(nr, nc))) continue;
-                if (canMove(r, c, nr, nc)) seed(nr, nc);
-            }
-        }
-        return this.puzzle.dots.every(d => !outside.has(enc(d.r, d.c)));
-    }
-
-    onSolved() {
-        // Flash overlay on the SVG
-        const overlay = this.container.querySelector('.solved-overlay');
-        if (overlay) overlay.classList.remove('hidden');
-        showToast();
-    }
-
-    reset() {
-        this.hEdges = Array.from({ length: this.rows + 1 }, () => new Array(this.cols).fill(false));
-        this.vEdges = Array.from({ length: this.rows }, () => new Array(this.cols + 1).fill(false));
-        this.solved = false;
-        const overlay = this.container.querySelector('.solved-overlay');
-        if (overlay) overlay.classList.add('hidden');
-        // repaint all edges
-        for (let r = 0; r <= this.rows; r++)
-            for (let c = 0; c < this.cols; c++)
-                this.repaintEdge('h', r, c);
-        for (let r = 0; r < this.rows; r++)
-            for (let c = 0; c <= this.cols; c++)
-                this.repaintEdge('v', r, c);
-    }
-
-    // ---- Build SVG ----
-    build() {
-        const W = this.cols * CELL + MARGIN * 2;
-        const H = this.rows * CELL + MARGIN * 2;
-        const svg = svgEl('svg', { width: W, height: H, viewBox: `0 0 ${W} ${H}` });
-
-        // Active cells background
+        // セル色を更新
         for (let r = 0; r < this.rows; r++) {
             for (let c = 0; c < this.cols; c++) {
                 if (!this.puzzle.grid[r][c]) continue;
-                svg.appendChild(svgEl('rect', {
-                    x: MARGIN + c * CELL, y: MARGIN + r * CELL,
-                    width: CELL, height: CELL,
-                    fill: '#f0f4ff', stroke: '#c7d2f0', 'stroke-width': '0.5'
-                }));
+                const el = this.cellEls[this.cellKey(r, c)];
+                if (!el) continue;
+                const inPath = this.pathSet.has(this.cellKey(r, c));
+                el.setAttribute('fill', inPath ? '#dbeafe' : '#f0f4ff');
             }
         }
 
-        // Dots (circles)
+        // パスの線を描画（セル中心を結ぶ）
+        for (let i = 0; i < this.path.length - 1; i++) {
+            const a = this.path[i];
+            const b = this.path[i + 1];
+            const x1 = MARGIN + a.c * CELL + CELL / 2;
+            const y1 = MARGIN + a.r * CELL + CELL / 2;
+            const x2 = MARGIN + b.c * CELL + CELL / 2;
+            const y2 = MARGIN + b.r * CELL + CELL / 2;
+            const line = svgEl('line', {
+                x1, y1, x2, y2,
+                stroke: '#2563eb', 'stroke-width': '6',
+                'stroke-linecap': 'round'
+            });
+            this.svgEl.insertBefore(line, this.svgEl.querySelector('.overlay-group'));
+            this.pathLineEls.push(line);
+        }
+
+        // ループ完成時の閉じる線（最後→最初）
+        if (this.solved && this.path.length > 1) {
+            const a = this.path[this.path.length - 1];
+            const b = this.path[0];
+            const x1 = MARGIN + a.c * CELL + CELL / 2;
+            const y1 = MARGIN + a.r * CELL + CELL / 2;
+            const x2 = MARGIN + b.c * CELL + CELL / 2;
+            const y2 = MARGIN + b.r * CELL + CELL / 2;
+            const line = svgEl('line', {
+                x1, y1, x2, y2,
+                stroke: '#16a34a', 'stroke-width': '6',
+                'stroke-linecap': 'round'
+            });
+            this.svgEl.insertBefore(line, this.svgEl.querySelector('.overlay-group'));
+            this.pathLineEls.push(line);
+        }
+
+        // 始点と終点にドットを表示
+        if (this.path.length > 0) {
+            const start = this.path[0];
+            const cx = MARGIN + start.c * CELL + CELL / 2;
+            const cy = MARGIN + start.r * CELL + CELL / 2;
+            const dot = svgEl('circle', { cx, cy, r: 7, fill: '#2563eb' });
+            this.svgEl.insertBefore(dot, this.svgEl.querySelector('.overlay-group'));
+            this.pathLineEls.push(dot);
+        }
+    }
+
+    showSolved() {
+        const overlay = this.container.querySelector('.solved-overlay');
+        if (overlay) overlay.classList.remove('hidden');
+        showToast();
+        // 全セルを緑色に
+        for (const key of Object.keys(this.cellEls)) {
+            this.cellEls[key].setAttribute('fill', '#bbf7d0');
+        }
+    }
+
+    reset() {
+        this.path = [];
+        this.pathSet = new Set();
+        this.drawing = false;
+        this.solved = false;
+        for (const el of this.pathLineEls) el.remove();
+        this.pathLineEls = [];
+        for (let r = 0; r < this.rows; r++)
+            for (let c = 0; c < this.cols; c++)
+                if (this.puzzle.grid[r][c] && this.cellEls[this.cellKey(r, c)])
+                    this.cellEls[this.cellKey(r, c)].setAttribute('fill', '#f0f4ff');
+        const overlay = this.container.querySelector('.solved-overlay');
+        if (overlay) overlay.classList.add('hidden');
+    }
+
+    // ---- SVGを構築 ----
+    build() {
+        const W = this.cols * CELL + MARGIN * 2;
+        const H = this.rows * CELL + MARGIN * 2;
+        const svg = svgEl('svg', {
+            width: W, height: H, viewBox: `0 0 ${W} ${H}`,
+            style: 'touch-action: none; user-select: none;'
+        });
+        this.svgEl = svg;
+
+        // ---- セル背景 ----
+        for (let r = 0; r < this.rows; r++) {
+            for (let c = 0; c < this.cols; c++) {
+                if (!this.puzzle.grid[r][c]) continue;
+                const rect = svgEl('rect', {
+                    x: MARGIN + c * CELL, y: MARGIN + r * CELL,
+                    width: CELL, height: CELL,
+                    fill: '#f0f4ff', rx: '4',
+                    stroke: '#a5b4fc', 'stroke-width': '1.5'
+                });
+                this.cellEls[this.cellKey(r, c)] = rect;
+                svg.appendChild(rect);
+            }
+        }
+
+        // ---- ドット（○）表示 ----
+        const overlayGroup = svgEl('g', { class: 'overlay-group' });
         for (const d of this.puzzle.dots) {
             const cx = MARGIN + d.c * CELL + CELL / 2;
             const cy = MARGIN + d.r * CELL + CELL / 2;
-            svg.appendChild(svgEl('circle', { cx, cy, r: DOT_R + 2, fill: 'white', stroke: '#1e3a8a', 'stroke-width': '2.5' }));
-            svg.appendChild(svgEl('circle', { cx, cy, r: DOT_R - 3, fill: '#1e3a8a' }));
+            overlayGroup.appendChild(svgEl('circle', {
+                cx, cy, r: 10, fill: 'white', stroke: '#1e3a8a', 'stroke-width': '2.5'
+            }));
+            overlayGroup.appendChild(svgEl('circle', {
+                cx, cy, r: 4, fill: '#1e3a8a'
+            }));
         }
+        svg.appendChild(overlayGroup);
 
-        // Clickable horizontal edges
-        for (let r = 0; r <= this.rows; r++) {
-            for (let c = 0; c < this.cols; c++) {
-                if (!this.hClickable(r, c)) continue;
-                const x1 = MARGIN + c * CELL;
-                const y = MARGIN + r * CELL;
-                const x2 = x1 + CELL;
+        // ---- セル番号（デバッグ用・非表示）----
 
-                // visible line (drawn on top)
-                const line = svgEl('line', { x1, y1: y, x2, y2: y, stroke: 'transparent', 'stroke-width': '0', 'stroke-linecap': 'round' });
-                svg.appendChild(line);
-                this.edgeEls[`h-${r}-${c}`] = line;
+        // ---- イベント: マウス/タッチ ----
+        const getCell = (x, y) => {
+            const rect = svg.getBoundingClientRect();
+            const px = x - rect.left;
+            const py = y - rect.top;
+            const c = Math.floor((px - MARGIN) / CELL);
+            const r = Math.floor((py - MARGIN) / CELL);
+            return { r, c };
+        };
 
-                // hit area
-                const hit = svgEl('rect', {
-                    x: x1, y: y - 8, width: CELL, height: 16,
-                    fill: 'transparent', cursor: 'pointer'
-                });
-                hit.addEventListener('click', () => this.toggleH(r, c));
-                hit.addEventListener('mouseover', () => { if (!this.solved) hit.setAttribute('fill', 'rgba(100,130,255,0.12)'); });
-                hit.addEventListener('mouseout', () => hit.setAttribute('fill', 'transparent'));
-                svg.appendChild(hit);
-            }
-        }
+        // マウス
+        svg.addEventListener('mousedown', e => {
+            const { r, c } = getCell(e.clientX, e.clientY);
+            this.startPath(r, c);
+        });
+        svg.addEventListener('mousemove', e => {
+            if (!this.drawing) return;
+            const { r, c } = getCell(e.clientX, e.clientY);
+            this.extendPath(r, c);
+        });
+        svg.addEventListener('mouseup', () => this.endPath());
+        svg.addEventListener('mouseleave', () => { if (this.drawing) this.endPath(); });
 
-        // Clickable vertical edges
-        for (let r = 0; r < this.rows; r++) {
-            for (let c = 0; c <= this.cols; c++) {
-                if (!this.vClickable(r, c)) continue;
-                const x = MARGIN + c * CELL;
-                const y1 = MARGIN + r * CELL;
-                const y2 = y1 + CELL;
-
-                const line = svgEl('line', { x1: x, y1, x2: x, y2, stroke: 'transparent', 'stroke-width': '0', 'stroke-linecap': 'round' });
-                svg.appendChild(line);
-                this.edgeEls[`v-${r}-${c}`] = line;
-
-                const hit = svgEl('rect', {
-                    x: x - 8, y: y1, width: 16, height: CELL,
-                    fill: 'transparent', cursor: 'pointer'
-                });
-                hit.addEventListener('click', () => this.toggleV(r, c));
-                hit.addEventListener('mouseover', () => { if (!this.solved) hit.setAttribute('fill', 'rgba(100,130,255,0.12)'); });
-                hit.addEventListener('mouseout', () => hit.setAttribute('fill', 'transparent'));
-                svg.appendChild(hit);
-            }
-        }
+        // タッチ
+        svg.addEventListener('touchstart', e => {
+            e.preventDefault();
+            const t = e.touches[0];
+            const { r, c } = getCell(t.clientX, t.clientY);
+            this.startPath(r, c);
+        }, { passive: false });
+        svg.addEventListener('touchmove', e => {
+            e.preventDefault();
+            if (!this.drawing) return;
+            const t = e.touches[0];
+            const { r, c } = getCell(t.clientX, t.clientY);
+            this.extendPath(r, c);
+        }, { passive: false });
+        svg.addEventListener('touchend', () => this.endPath());
 
         this.container.querySelector('.svg-wrap').appendChild(svg);
     }
@@ -237,13 +279,13 @@ function showToast() {
     setTimeout(() => t.classList.add('hidden'), 2500);
 }
 
-// ================== Render sets ==================
+// ================== レンダリング ==================
 function renderAll() {
     const root = document.getElementById('sets-container');
     for (const set of PUZZLE_SETS) {
         const setDiv = document.createElement('div');
         setDiv.innerHTML = `
-      <h2 class="caveat text-3xl font-bold mb-5" style="color:#2563eb">${set.name}</h2>
+      <h2 class="caveat text-3xl font-bold mb-5 text-blue-600">${set.name}</h2>
       <div class="puzzles-row flex flex-wrap gap-6"></div>
     `;
         const row = setDiv.querySelector('.puzzles-row');
@@ -253,7 +295,7 @@ function renderAll() {
             card.className = 'puzzle-card bg-white rounded-xl shadow-md p-4 relative select-none';
             card.innerHTML = `
         <div class="svg-wrap mb-2"></div>
-        <div class="solved-overlay hidden absolute inset-0 bg-green-400/20 rounded-xl flex items-center justify-center">
+        <div class="solved-overlay hidden absolute inset-0 bg-green-400/20 rounded-xl flex items-center justify-center pointer-events-none">
           <span class="caveat text-3xl font-bold text-green-700">✓ Solved!</span>
         </div>
         <div class="flex items-center justify-between mt-1">
